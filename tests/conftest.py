@@ -1,0 +1,9 @@
+import os
+os.environ.setdefault("POSTGRES_URL", "sqlite+aiosqlite:///:memory:")
+os.environ.setdefault("SHOPIFY_STORE", "example.myshopify.com")
+os.environ.setdefault("SHOPIFY_ACCESS_TOKEN", "token")
+os.environ.setdefault("SHOPIFY_LOCATION_ID", "gid://shopify/Location/1")
+os.environ.setdefault("SHOPIFY_WEBHOOK_SECRET", "")
+os.environ.setdefault("SFTP_HOST", "localhost")
+os.environ.setdefault("SFTP_USERNAME", "user")
+os.environ.setdefault("WORKERS_ENABLED", "false")
