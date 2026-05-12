@@ -1,6 +1,10 @@
 from io import StringIO
 from pathlib import Path, PurePosixPath
+import os
+import shutil
 import socket
+import subprocess
+import tempfile
 import paramiko
 from app.config.logging import logger
 from app.config.settings import settings
@@ -9,7 +13,7 @@ from app.utils.exceptions import SftpError
 log = logger(__name__)
 
 class SftpClient:
-    """Paramiko SFTP client supporting password and private-key authentication."""
+    """Paramiko SFTP client supporting password, OpenSSH key, and PuTTY PPK key authentication."""
     def __init__(self) -> None:
         self._ssh: paramiko.SSHClient | None = None
         self._sftp: paramiko.SFTPClient | None = None
@@ -24,7 +28,7 @@ class SftpClient:
             pkey = self._load_private_key(settings.sftp_private_key) if settings.sftp_private_key else None
             ssh.connect(hostname=settings.sftp_host, port=settings.sftp_port, username=settings.sftp_username, password=settings.sftp_password or None, pkey=pkey, timeout=30, banner_timeout=30, auth_timeout=30)
             self._ssh = ssh; self._sftp = ssh.open_sftp()
-            log.info("sftp_connected", host=settings.sftp_host, port=settings.sftp_port)
+            log.info("sftp_connected", host=settings.sftp_host, port=settings.sftp_port, key_auth=bool(pkey))
         except (paramiko.SSHException, socket.error, OSError) as exc:
             self.close()
             raise SftpError(f"Failed to connect to SFTP: {exc}") from exc
@@ -103,14 +107,60 @@ class SftpClient:
                 sftp.mkdir(str(current))
 
     def _load_private_key(self, value: str | None) -> paramiko.PKey | None:
+        """Load OpenSSH or PuTTY PPK private keys from a path or raw key text.
+
+        Paramiko is tried first because recent releases can parse multiple key
+        formats directly. If the key is a PuTTY PPK and Paramiko cannot parse it,
+        the method falls back to `puttygen` conversion to an OpenSSH PEM key. The
+        Docker image installs `putty-tools` for this fallback.
+        """
         if not value:
             return None
-        loaders = (paramiko.RSAKey.from_private_key, paramiko.Ed25519Key.from_private_key, paramiko.ECDSAKey.from_private_key)
-        key_text = Path(value).read_text() if Path(value).exists() else value
+        source_path = Path(value).expanduser()
+        key_text = source_path.read_text() if source_path.exists() else value
+        passphrase = settings.sftp_private_key_passphrase or None
+        direct_key = self._try_paramiko_key_loaders(key_text, passphrase)
+        if direct_key:
+            return direct_key
+        if self._is_putty_ppk(key_text):
+            converted = self._convert_ppk_to_openssh(key_text, passphrase)
+            converted_key = self._try_paramiko_key_loaders(converted, passphrase)
+            if converted_key:
+                return converted_key
+        raise SftpError("Unable to load SFTP private key. For PuTTY .ppk files, provide a supported PPK/OpenSSH key and SFTP_PRIVATE_KEY_PASSPHRASE if encrypted.")
+
+    def _try_paramiko_key_loaders(self, key_text: str, passphrase: str | None) -> paramiko.PKey | None:
+        loaders = (paramiko.RSAKey.from_private_key, paramiko.Ed25519Key.from_private_key, paramiko.ECDSAKey.from_private_key, paramiko.DSSKey.from_private_key)
         last: Exception | None = None
         for loader in loaders:
             try:
-                return loader(StringIO(key_text))
-            except Exception as exc:  # Paramiko raises several key-specific exceptions.
+                return loader(StringIO(key_text), password=passphrase)
+            except Exception as exc:
                 last = exc
-        raise SftpError(f"Unable to load SFTP private key: {last}")
+        log.debug("sftp_key_loader_failed", error=str(last) if last else None)
+        return None
+
+    def _is_putty_ppk(self, key_text: str) -> bool:
+        return key_text.lstrip().startswith("PuTTY-User-Key-File-")
+
+    def _convert_ppk_to_openssh(self, key_text: str, passphrase: str | None) -> str:
+        puttygen = shutil.which("puttygen")
+        if not puttygen:
+            raise SftpError("PuTTY .ppk key detected but puttygen is not installed. Install putty-tools or export the key in OpenSSH format.")
+        with tempfile.TemporaryDirectory(prefix="roxor-ppk-") as tmp:
+            tmp_path = Path(tmp)
+            ppk_path = tmp_path / "key.ppk"
+            out_path = tmp_path / "key.openssh"
+            ppk_path.write_text(key_text)
+            os.chmod(ppk_path, 0o600)
+            cmd = [puttygen, str(ppk_path), "-O", "private-openssh", "-o", str(out_path)]
+            passphrase_file: Path | None = None
+            if passphrase:
+                passphrase_file = tmp_path / "passphrase.txt"
+                passphrase_file.write_text(passphrase)
+                os.chmod(passphrase_file, 0o600)
+                cmd.extend(["--old-passphrase", str(passphrase_file)])
+            result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise SftpError(f"puttygen failed to convert PPK key: {result.stderr.strip() or result.stdout.strip()}")
+            return out_path.read_text()

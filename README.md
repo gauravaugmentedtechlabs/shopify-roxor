@@ -86,3 +86,16 @@ WORKERS_ENABLED=false
 ```bash
 pytest
 ```
+
+## SFTP private keys and PuTTY `.ppk` files
+
+Set `SFTP_PRIVATE_KEY` to either a filesystem path or the raw private-key contents. OpenSSH keys are loaded directly. PuTTY `.ppk` keys are also supported: the app first attempts Paramiko's key loaders and then falls back to `puttygen` conversion when needed. The Docker image installs `putty-tools` for that conversion path.
+
+For encrypted private keys, set:
+
+```text
+SFTP_PRIVATE_KEY=/run/secrets/roxor_sftp_private_key.ppk
+SFTP_PRIVATE_KEY_PASSPHRASE=your-key-passphrase
+```
+
+If you run outside Docker and use a `.ppk` key, install `putty-tools`/`puttygen` or export the key to OpenSSH format with PuTTYgen.

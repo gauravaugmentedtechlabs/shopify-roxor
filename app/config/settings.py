@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     sftp_username: str = Field(..., alias="SFTP_USERNAME")
     sftp_password: str | None = Field(None, alias="SFTP_PASSWORD")
     sftp_private_key: str | None = Field(None, alias="SFTP_PRIVATE_KEY")
+    sftp_private_key_passphrase: str | None = Field(None, alias="SFTP_PRIVATE_KEY_PASSPHRASE")
     sftp_outbound_orders_path: str = Field("/outbound/orders/", alias="SFTP_OUTBOUND_ORDERS_PATH")
     sftp_inbound_delivery_path: str = Field("/inbound/delivery/", alias="SFTP_INBOUND_DELIVERY_PATH")
     sftp_inbound_stock_path: str = Field("/inbound/stock/", alias="SFTP_INBOUND_STOCK_PATH")
